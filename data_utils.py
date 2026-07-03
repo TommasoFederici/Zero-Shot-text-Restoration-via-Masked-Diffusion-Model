@@ -9,7 +9,7 @@ def load_and_clean_wikitext(split: str = "test", num_samples: int = 500, min_wor
     """
     print(f"Loading WikiText-103 (split={split})...")
     # We use wikitext-103-raw-v1 to keep the punctuation intact
-    dataset = load_dataset("wikitext", "wikitext-103-raw-v1", split=split)
+    dataset = load_dataset("Salesforce/wikitext", "wikitext-103-raw-v1", split=split)
     
     clean_texts = []
     for item in dataset:

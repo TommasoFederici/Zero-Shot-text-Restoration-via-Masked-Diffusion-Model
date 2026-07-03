@@ -61,7 +61,7 @@ def format_for_qwen_fim(prefix: str, suffix: str) -> str:
     Uses the standard FIM tokens to force the model to generate the middle.
     """
     # Exact tokens used by the Qwen documentation for FIM
-    return f"{prefix}"
+    return f"<|fim_prefix|>{prefix}<|fim_suffix|>{suffix}<|fim_middle|>"
 
 def format_for_mdlm_diffusion(prefix: str, suffix: str, num_masks: int, mask_token: str = "[MASK]") -> str:
     """

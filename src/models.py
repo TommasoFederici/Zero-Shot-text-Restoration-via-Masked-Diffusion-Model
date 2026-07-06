@@ -76,6 +76,18 @@ class Restorer(ABC):
         """
         raise NotImplementedError
 
+    def unload(self) -> None:
+        """Release any cached real-model resources held by this restorer.
+
+        Real restorers cache their loaded model/tokenizer across
+        `restore()` calls (see `QwenFIMRestorer`/`MDLMRestorer`) so a
+        multi-text ablation loop doesn't reload a multi-GB checkpoint per
+        text. Call this before switching to a different model type in
+        the same Colab session, so GPU memory is actually freed rather
+        than held by PyTorch's caching allocator. No-op by default (and
+        for restorers still in mock mode, which never load anything).
+        """
+
 
 def _reinsert_spans(corruption: CorruptionResult, restored_spans: list[str]) -> str:
     """Rebuild full restored text by reinserting `restored_spans` into
@@ -136,6 +148,20 @@ class QwenFIMRestorer(Restorer):
         super().__init__(model_name=model_name, use_mock=use_mock)
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
+        self._model = None
+        self._tokenizer = None
+
+    def unload(self) -> None:
+        """Release the cached Qwen model/tokenizer and free GPU memory."""
+        self._model = None
+        self._tokenizer = None
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
     def restore(self, corruption: CorruptionResult) -> RestorationResult:
         start_time = time.perf_counter()
@@ -220,17 +246,22 @@ class QwenFIMRestorer(Restorer):
             A list of generated fill strings, one per prompt.
 
         Note:
-            Lazily imports `transformers` and loads real model weights.
-            Do NOT call this in local dev or tests -- it will attempt to
-            download and load a multi-GB checkpoint. Intended only for the
-            Colab notebook (Phase 4) or explicit opt-in scripts.
+            Lazily imports `transformers` and loads real model weights on
+            the first call, caching them on `self` for reuse by
+            subsequent calls -- do NOT call this in local dev or tests,
+            it will attempt to download and load a multi-GB checkpoint.
+            Intended only for the Colab notebook (Phase 4) or explicit
+            opt-in scripts. Call `unload()` to free the cached model.
         """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model_name, dtype="auto", device_map="auto"
-        )
+        if self._model is None:
+            self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self._model = AutoModelForCausalLM.from_pretrained(
+                self.model_name, dtype="auto", device_map="auto"
+            )
+        tokenizer = self._tokenizer
+        model = self._model
 
         restored_spans: list[str] = []
         for prompt in prompts:
@@ -275,6 +306,22 @@ class MDLMRestorer(Restorer):
         """
         super().__init__(model_name=model_name, use_mock=use_mock)
         self.num_timesteps = num_timesteps
+        self._model = None
+        self._tokenizer = None
+        self._device = None
+
+    def unload(self) -> None:
+        """Release the cached MDLM model/tokenizer and free GPU memory."""
+        self._model = None
+        self._tokenizer = None
+        self._device = None
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
     def restore(self, corruption: CorruptionResult) -> RestorationResult:
         start_time = time.perf_counter()
@@ -336,9 +383,11 @@ class MDLMRestorer(Restorer):
 
         Note:
             Lazily imports `torch`/`transformers` and loads real model
-            weights. Do NOT call this in local dev or tests -- intended
-            only for the Colab notebook (Phase 4) or explicit opt-in
-            scripts.
+            weights on the first call, caching them on `self` for reuse
+            by subsequent calls -- do NOT call this in local dev or
+            tests. Intended only for the Colab notebook (Phase 4) or
+            explicit opt-in scripts. Call `unload()` to free the cached
+            model.
         """
         import torch
         from transformers import AutoModelForMaskedLM, AutoTokenizer
@@ -349,13 +398,17 @@ class MDLMRestorer(Restorer):
             resolve_mask_token_id,
         )
 
-        tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        model = AutoModelForMaskedLM.from_pretrained(
-            self.model_name, trust_remote_code=True, attn_implementation="eager"
-        )
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.to(device)
-        model.eval()
+        if self._model is None:
+            self._tokenizer = AutoTokenizer.from_pretrained("gpt2")
+            self._model = AutoModelForMaskedLM.from_pretrained(
+                self.model_name, trust_remote_code=True, attn_implementation="eager"
+            )
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self._model.to(self._device)
+            self._model.eval()
+        tokenizer = self._tokenizer
+        model = self._model
+        device = self._device
 
         token_ranges = align_mask_positions_to_tokens(
             corruption.original_text, corruption.mask_positions, tokenizer

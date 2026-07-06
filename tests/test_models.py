@@ -126,6 +126,17 @@ def test_mdlm_restore_real_smoke() -> None:
     assert len(result.restored_spans) == len(corruption.mask_positions)
 
 
+def test_unload_is_safe_before_any_real_restore() -> None:
+    qwen = QwenFIMRestorer(use_mock=True)
+    mdlm = MDLMRestorer(use_mock=True)
+
+    qwen.unload()
+    mdlm.unload()
+
+    assert qwen._model is None
+    assert mdlm._model is None
+
+
 def test_latency_is_recorded() -> None:
     text = load_toy_dataset()[2]
     corruption = SpanMasking(seed=42).corrupt(text, 0.3)

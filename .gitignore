@@ -1,0 +1,25 @@
+# Private project instructions / notes
+CLAUDE.md
+idea_progetto.md
+project_idea.md
+.claude/
+
+# Data & model artifacts
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Environment
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/

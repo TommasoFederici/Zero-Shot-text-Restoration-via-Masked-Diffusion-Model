@@ -1,0 +1,7 @@
+datasets
+transformers
+torch
+evaluate
+rouge-score
+bert-score
+pytest

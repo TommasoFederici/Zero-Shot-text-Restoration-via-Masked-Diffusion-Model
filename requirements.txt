@@ -5,3 +5,10 @@ evaluate
 rouge-score
 bert-score
 pytest
+pandas
+matplotlib
+seaborn
+jupyter
+ipykernel
+accelerate
+sentencepiece

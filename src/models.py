@@ -316,32 +316,68 @@ class MDLMRestorer(Restorer):
         ]
 
     def _restore_real(self, corruption: CorruptionResult) -> list[str]:
-        """Run real MDLM denoising.
+        """Run real MDLM absorbing-state denoising via a custom sampling loop.
+
+        Loads the real `kuleshov-group/mdlm-owt` checkpoint via
+        `transformers.AutoModelForMaskedLM` with `trust_remote_code=True`
+        (its own reference repository only documents unconditional
+        sampling, not conditional/masked infilling), then resolves masked
+        token ranges with `src.mdlm_utils.denoise`, which keeps all
+        non-masked context tokens clamped throughout the reverse process.
 
         Args:
             corruption: the source `CorruptionResult`.
 
         Returns:
-            Never returns; always raises.
+            A list of restored fill strings, one per mask position, in
+            the same order as `corruption.mask_positions`.
 
-        Raises:
-            NotImplementedError: always. There is no official pip-installable
-                `mdlm` package as of writing. Options deferred to Phase 4:
-                (a) vendor/adapt the reference implementation
-                (kuleshov-group/mdlm on GitHub) as a local module and
-                lazily import it here; (b) implement a simplified custom
-                discrete-diffusion denoising loop directly against a HF
-                masked-LM checkpoint, iteratively re-predicting mask
-                tokens over `num_timesteps` steps; (c) depend on a
-                specific HF model repo that bundles its own modeling code
-                via `trust_remote_code=True`. This decision should be made
-                by the project owner before Phase 4; it does not block
-                Phase 2's mock-path implementation.
+        Note:
+            Lazily imports `torch`/`transformers` and loads real model
+            weights. Do NOT call this in local dev or tests -- intended
+            only for the Colab notebook (Phase 4) or explicit opt-in
+            scripts.
         """
-        raise NotImplementedError(
-            "Real MDLM inference is not implemented for local dev; "
-            "see docstring for backend options to decide in Phase 4."
+        import torch
+        from transformers import AutoModelForMaskedLM, AutoTokenizer
+
+        from src.mdlm_utils import (
+            align_mask_positions_to_tokens,
+            denoise,
+            resolve_mask_token_id,
         )
+
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        model = AutoModelForMaskedLM.from_pretrained(
+            self.model_name, trust_remote_code=True
+        )
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+        model.eval()
+
+        token_ranges = align_mask_positions_to_tokens(
+            corruption.original_text, corruption.mask_positions, tokenizer
+        )
+        input_ids = tokenizer(corruption.original_text, return_tensors="pt")[
+            "input_ids"
+        ]
+        mask_token_id = resolve_mask_token_id(model, tokenizer)
+        for start, end in token_ranges:
+            input_ids[0, start:end] = mask_token_id
+
+        resolved_ids = denoise(
+            model=model,
+            input_ids=input_ids,
+            masked_token_ranges=token_ranges,
+            mask_token_id=mask_token_id,
+            num_timesteps=self.num_timesteps,
+            device=device,
+        )
+
+        return [
+            tokenizer.decode(resolved_ids[0, start:end], skip_special_tokens=True).strip()
+            for start, end in token_ranges
+        ]
 
 
 def build_restorer(model_type: str, use_mock: bool = True, **kwargs: object) -> Restorer:

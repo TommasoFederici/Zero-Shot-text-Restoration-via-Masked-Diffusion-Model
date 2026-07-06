@@ -9,9 +9,13 @@ Run: python -m pytest tests/test_models.py
 
 from __future__ import annotations
 
+import os
+import re
+
 import pytest
 
 from src.data import RandomTokenMasking, SpanMasking, load_toy_dataset
+from src.mdlm_utils import align_mask_positions_to_tokens
 from src.models import (
     MDLMRestorer,
     QwenFIMRestorer,
@@ -90,11 +94,36 @@ def test_build_restorer_defaults_to_mock() -> None:
     assert build_restorer("mdlm").use_mock is True
 
 
-def test_mdlm_restore_real_not_implemented() -> None:
-    with pytest.raises(NotImplementedError):
-        MDLMRestorer()._restore_real(
-            SpanMasking(seed=1).corrupt(load_toy_dataset()[0], 0.3)
-        )
+def test_align_mask_positions_to_tokens_word_per_token() -> None:
+    class _StubTokenizer:
+        """Minimal offset-mapping tokenizer stub (one token per word),
+        avoiding any real HF tokenizer load in local tests."""
+
+        def __call__(self, text: str, return_offsets_mapping: bool = False):
+            offsets = [(m.start(), m.end()) for m in re.finditer(r"\S+", text)]
+            return {"offset_mapping": offsets}
+
+    text = "The quick brown fox jumps"
+    token_ranges = align_mask_positions_to_tokens(
+        original_text=text,
+        mask_positions=[(1, 3), (4, 5)],
+        tokenizer=_StubTokenizer(),
+    )
+    assert token_ranges == [(1, 3), (4, 5)]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("RUN_GPU_TESTS"),
+    reason="requires real MDLM weights + GPU/network, run only in Colab",
+)
+def test_mdlm_restore_real_smoke() -> None:
+    text = load_toy_dataset()[0]
+    corruption = SpanMasking(seed=1).corrupt(text, 0.3)
+    result = MDLMRestorer(use_mock=False, num_timesteps=4).restore(corruption)
+
+    assert isinstance(result, RestorationResult)
+    assert result.is_mock is False
+    assert len(result.restored_spans) == len(corruption.mask_positions)
 
 
 def test_latency_is_recorded() -> None:

@@ -351,7 +351,7 @@ class MDLMRestorer(Restorer):
 
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
         model = AutoModelForMaskedLM.from_pretrained(
-            self.model_name, trust_remote_code=True
+            self.model_name, trust_remote_code=True, attn_implementation="eager"
         )
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)

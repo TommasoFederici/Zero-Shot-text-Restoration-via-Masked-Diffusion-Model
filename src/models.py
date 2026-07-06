@@ -228,11 +228,13 @@ class QwenFIMRestorer(Restorer):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        model = AutoModelForCausalLM.from_pretrained(self.model_name)
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_name, dtype="auto", device_map="auto"
+        )
 
         restored_spans: list[str] = []
         for prompt in prompts:
-            inputs = tokenizer(prompt, return_tensors="pt")
+            inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
             output_ids = model.generate(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,

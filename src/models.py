@@ -374,6 +374,12 @@ class MDLMRestorer(Restorer):
         token ranges with `src.mdlm_utils.denoise`, which keeps all
         non-masked context tokens clamped throughout the reverse process.
 
+        The checkpoint's custom modeling code hard-imports `flash_attn`
+        with no eager/sdpa fallback, but real `flash-attn` only supports
+        Ampere-or-newer GPUs (not Colab's free-tier T4). `src.flash_attn_shim`
+        installs a pure-PyTorch stand-in under the same module names
+        before loading, so this runs on any GPU.
+
         Args:
             corruption: the source `CorruptionResult`.
 
@@ -392,6 +398,7 @@ class MDLMRestorer(Restorer):
         import torch
         from transformers import AutoModelForMaskedLM, AutoTokenizer
 
+        from src.flash_attn_shim import install as install_flash_attn_shim
         from src.mdlm_utils import (
             align_mask_positions_to_tokens,
             denoise,
@@ -399,9 +406,10 @@ class MDLMRestorer(Restorer):
         )
 
         if self._model is None:
+            install_flash_attn_shim()
             self._tokenizer = AutoTokenizer.from_pretrained("gpt2")
             self._model = AutoModelForMaskedLM.from_pretrained(
-                self.model_name, trust_remote_code=True, attn_implementation="eager"
+                self.model_name, trust_remote_code=True
             )
             self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self._model.to(self._device)

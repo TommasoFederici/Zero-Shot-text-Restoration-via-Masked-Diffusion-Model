@@ -84,6 +84,13 @@ def align_mask_positions_to_tokens(
 def resolve_mask_token_id(model: Any, tokenizer: Any) -> int:
     """Determine the token id representing MDLM's absorbing/mask state.
 
+    `kuleshov-group/mdlm-owt`'s `config.json` reports `vocab_size=50258`
+    against GPT-2's own vocab of 50257 -- one extra slot, matching the
+    common absorbing-state-diffusion convention of appending a single
+    mask/absorbing token at the final vocab index. That's used as a
+    last-resort fallback here, since the model's `modeling_mdlm.py` has
+    no explicit `mask_token_id` concept of its own.
+
     Args:
         model: the loaded MDLM model (`trust_remote_code=True`).
         tokenizer: the associated tokenizer.
@@ -92,20 +99,32 @@ def resolve_mask_token_id(model: Any, tokenizer: Any) -> int:
         The mask token id to use when constructing masked `input_ids`.
 
     Raises:
-        RuntimeError: if no mask token id can be determined from either
-            the tokenizer or the model's config. This must not be guessed
-            silently -- verify interactively (in Colab) which id the
-            checkpoint actually expects before relying on this function.
+        RuntimeError: if no mask token id can be determined from the
+            tokenizer, the model's config, or the vocab-size convention.
+            This must not be guessed silently -- verify interactively (in
+            Colab) which id the checkpoint actually expects before
+            relying on this function.
     """
     if tokenizer.mask_token_id is not None:
         return tokenizer.mask_token_id
     mask_token_id = getattr(model.config, "mask_token_id", None)
     if mask_token_id is not None:
         return mask_token_id
+
+    model_vocab_size = getattr(model.config, "vocab_size", None)
+    tokenizer_vocab_size = getattr(tokenizer, "vocab_size", None)
+    if (
+        model_vocab_size is not None
+        and tokenizer_vocab_size is not None
+        and model_vocab_size == tokenizer_vocab_size + 1
+    ):
+        return model_vocab_size - 1
+
     raise RuntimeError(
-        "could not resolve a mask token id from the tokenizer or model "
-        "config; inspect the model's remote code/config to find the "
-        "correct id before running real MDLM inference"
+        "could not resolve a mask token id from the tokenizer, model "
+        "config, or vocab-size convention; inspect the model's remote "
+        "code/config to find the correct id before running real MDLM "
+        "inference"
     )
 
 
@@ -127,7 +146,12 @@ def denoise(
     `masked_token_ranges` are never touched.
 
     Args:
-        model: the loaded MDLM model, callable as `model(input_ids).logits`.
+        model: the loaded MDLM model, callable as
+            `model(input_ids, timesteps=..., return_dict=True).logits`.
+            `kuleshov-group/mdlm-owt` has `time_conditioning=False` in its
+            config, so its forward pass zeroes out `timesteps` internally
+            regardless of the value passed -- a zero placeholder tensor
+            is used here rather than a real per-step noise schedule.
         input_ids: token ids, shape `[1, seq_len]`, with every position
             inside `masked_token_ranges` already set to `mask_token_id`.
         masked_token_ranges: token-index (start, end) ranges to resolve,
@@ -145,6 +169,7 @@ def denoise(
         previously-masked position replaced by its committed token id.
     """
     input_ids = input_ids.clone().to(device)
+    timesteps = torch.zeros(input_ids.shape[0], device=device)
     remaining: list[int] = [
         i for start, end in masked_token_ranges for i in range(start, end)
     ]
@@ -155,7 +180,7 @@ def denoise(
         steps_left = num_timesteps - step
 
         with torch.no_grad():
-            logits = model(input_ids).logits
+            logits = model(input_ids, timesteps=timesteps, return_dict=True).logits
         position_logits = logits[0, remaining, :]
         probs = torch.softmax(position_logits, dim=-1)
         confidences, predicted_ids = probs.max(dim=-1)

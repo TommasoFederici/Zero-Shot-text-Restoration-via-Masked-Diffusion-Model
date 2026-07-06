@@ -12,3 +12,4 @@ jupyter
 ipykernel
 accelerate
 sentencepiece
+einops

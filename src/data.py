@@ -283,7 +283,7 @@ def load_wikitext103(
     from datasets import load_dataset
 
     dataset = load_dataset(
-        "wikitext",
+        "Salesforce/wikitext",
         "wikitext-103-raw-v1",
         split=split,
         cache_dir=str(cache_dir) if cache_dir else None,

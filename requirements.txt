@@ -1,5 +1,5 @@
 datasets
-transformers
+transformers<5.0.0,>=4.44.0
 torch
 evaluate
 rouge-score

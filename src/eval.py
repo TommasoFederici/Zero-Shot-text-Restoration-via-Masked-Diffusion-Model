@@ -164,11 +164,23 @@ def _perplexity_real(text: str) -> float:
         default) to compute token log-likelihoods. Do NOT call this in
         local dev or tests. Intended only for the Colab notebook
         (Phase 4) or explicit opt-in scripts.
+
+        `text` is the fully reconstructed document (see `_reinsert_spans`
+        in `src/models.py`), not the windowed slice `context_window_words`
+        bounds for restoration -- so it can still exceed GPT-2's 1024-token
+        context on long WikiText-103 documents. `evaluate`'s perplexity
+        metric does not truncate unless `max_length` is passed explicitly;
+        without it, an over-long sequence overflows GPT-2's position
+        embeddings, which surfaces as an opaque CUDA device-side assert
+        (asynchronous GPU errors get reported at a later, unrelated call)
+        rather than a clean Python error.
     """
     from evaluate import load
 
     perplexity_metric = load("perplexity", module_type="metric")
-    results = perplexity_metric.compute(predictions=[text], model_id="gpt2")
+    results = perplexity_metric.compute(
+        predictions=[text], model_id="gpt2", max_length=1024
+    )
     return results["mean_perplexity"]
 
 

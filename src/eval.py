@@ -15,8 +15,22 @@ Provides:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Optional
 
 from src.models import RestorationResult
+
+# Lazily-populated module-level caches for the real BERTScore/perplexity
+# backends. Both `bert_score.score(...)` and `evaluate`'s perplexity metric
+# reload their underlying model from scratch on every call if not cached
+# this way -- observed directly in a real Colab run as
+# "Some weights of RobertaModel were not initialized..." printed once per
+# restoration instead of once per notebook run. Caching mirrors the lazy
+# `self._model` pattern already used by `Restorer` subclasses in
+# `src/models.py`.
+_bertscore_scorer: Optional[Any] = None
+_perplexity_model: Optional[Any] = None
+_perplexity_tokenizer: Optional[Any] = None
+_perplexity_device: Optional[Any] = None
 
 
 @dataclass
@@ -122,14 +136,24 @@ def _bertscore_real(candidate: str, reference: str) -> tuple[float, float, float
         A `(precision, recall, f1)` tuple.
 
     Note:
-        Lazily imports `bert_score` and loads a real transformer model
-        (RoBERTa-large by default) to compute contextual embeddings. Do
-        NOT call this in local dev or tests. Intended only for the Colab
-        notebook (Phase 4) or explicit opt-in scripts.
-    """
-    from bert_score import score
+        Lazily loads a real transformer model (RoBERTa-large by default,
+        cached module-wide in `_bertscore_scorer` after first use) to
+        compute contextual embeddings. Do NOT call this in local dev or
+        tests. Intended only for the Colab notebook (Phase 4) or explicit
+        opt-in scripts.
 
-    precision, recall, f1 = score([candidate], [reference], lang="en")
+        Uses the `BERTScorer` class rather than `bert_score.score(...)`:
+        the latter reconstructs the underlying model from scratch on
+        every call, which is fine once but reloads RoBERTa-large onto the
+        GPU for every single restoration when called from `evaluate_batch`.
+    """
+    global _bertscore_scorer
+    if _bertscore_scorer is None:
+        from bert_score import BERTScorer
+
+        _bertscore_scorer = BERTScorer(lang="en")
+
+    precision, recall, f1 = _bertscore_scorer.score([candidate], [reference])
     return precision.item(), recall.item(), f1.item()
 
 
@@ -151,7 +175,7 @@ def _perplexity_mock(candidate: str, reference: str) -> float:
 
 
 def _perplexity_real(text: str) -> float:
-    """Compute real perplexity of `text` via HF `evaluate`'s perplexity metric.
+    """Compute real perplexity of `text` via a cached GPT-2 causal LM.
 
     Args:
         text: text to score (typically the full restored text).
@@ -160,28 +184,51 @@ def _perplexity_real(text: str) -> float:
         The perplexity score (GPT-2 default model).
 
     Note:
-        Lazily imports `evaluate` and loads a real causal LM (GPT-2 by
-        default) to compute token log-likelihoods. Do NOT call this in
-        local dev or tests. Intended only for the Colab notebook
-        (Phase 4) or explicit opt-in scripts.
+        Lazily loads GPT-2 (cached module-wide in `_perplexity_model`/
+        `_perplexity_tokenizer` after first use) to compute token
+        log-likelihoods. Do NOT call this in local dev or tests. Intended
+        only for the Colab notebook (Phase 4) or explicit opt-in scripts.
+
+        Implemented directly against `transformers` rather than via HF
+        `evaluate`'s perplexity metric: that metric's `compute()` calls
+        `AutoModelForCausalLM.from_pretrained(model_id)` internally on
+        every invocation regardless of caching the `Metric` object
+        returned by `evaluate.load(...)`, reloading GPT-2 onto the GPU
+        for every single restoration when called from `evaluate_batch`.
 
         `text` is the fully reconstructed document (see `_reinsert_spans`
         in `src/models.py`), not the windowed slice `context_window_words`
         bounds for restoration -- so it can still exceed GPT-2's 1024-token
-        context on long WikiText-103 documents. `evaluate`'s perplexity
-        metric does not truncate unless `max_length` is passed explicitly;
-        without it, an over-long sequence overflows GPT-2's position
-        embeddings, which surfaces as an opaque CUDA device-side assert
-        (asynchronous GPU errors get reported at a later, unrelated call)
-        rather than a clean Python error.
+        context on long WikiText-103 documents. Truncating to 1024 tokens
+        avoids overflowing GPT-2's position embeddings, which otherwise
+        surfaces as an opaque CUDA device-side assert (asynchronous GPU
+        errors get reported at a later, unrelated call) rather than a
+        clean Python error. The tokenizer's `eos_token_id` is prepended as
+        a BOS surrogate (GPT-2 has no dedicated BOS token) so the first
+        real token is scored with some context, matching the convention
+        used by standard perplexity implementations (e.g. HF `evaluate`'s
+        `add_start_token=True` default).
     """
-    from evaluate import load
+    import torch
 
-    perplexity_metric = load("perplexity", module_type="metric")
-    results = perplexity_metric.compute(
-        predictions=[text], model_id="gpt2", max_length=1024
-    )
-    return results["mean_perplexity"]
+    global _perplexity_model, _perplexity_tokenizer, _perplexity_device
+    if _perplexity_model is None:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        _perplexity_tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        _perplexity_model = AutoModelForCausalLM.from_pretrained("gpt2")
+        _perplexity_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _perplexity_model.to(_perplexity_device)
+        _perplexity_model.eval()
+
+    token_ids = _perplexity_tokenizer(text, add_special_tokens=False)["input_ids"]
+    token_ids = [_perplexity_tokenizer.eos_token_id] + token_ids[:1023]
+    input_ids = torch.tensor([token_ids], device=_perplexity_device)
+
+    with torch.no_grad():
+        loss = _perplexity_model(input_ids, labels=input_ids).loss
+
+    return torch.exp(loss).item()
 
 
 def evaluate_restoration(

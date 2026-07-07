@@ -136,6 +136,7 @@ class QwenFIMRestorer(Restorer):
         use_mock: bool = True,
         max_new_tokens: int = 64,
         temperature: float = 0.2,
+        context_window_words: Optional[int] = 75,
     ) -> None:
         """Initialize the Qwen FIM restorer.
 
@@ -144,10 +145,17 @@ class QwenFIMRestorer(Restorer):
             use_mock: see `Restorer.__init__`.
             max_new_tokens: generation cap used by the real inference path.
             temperature: sampling temperature used by the real inference path.
+            context_window_words: max number of words kept on each side of a
+                mask position when building its FIM prompt (see
+                `_build_fim_prompts`). Bounds prompt length -- and thus
+                latency/memory -- regardless of document length, instead of
+                feeding the entire prefix/suffix. `None` disables windowing
+                (uses the full prefix/suffix, the original behavior).
         """
         super().__init__(model_name=model_name, use_mock=use_mock)
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
+        self.context_window_words = context_window_words
         self._model = None
         self._tokenizer = None
 
@@ -182,6 +190,7 @@ class QwenFIMRestorer(Restorer):
             inference_config={
                 "max_new_tokens": self.max_new_tokens,
                 "temperature": self.temperature,
+                "context_window_words": self.context_window_words,
             },
             prompt_used=prompts[0] if prompts else None,
             latency_seconds=latency,
@@ -195,7 +204,12 @@ class QwenFIMRestorer(Restorer):
         and the suffix is the joined words after `end`, so the model only
         ever sees one blanked region per call -- the multi-mask case
         (`RandomTokenMasking`) is handled as N independent single-hole FIM
-        prompts rather than one combined multi-hole prompt.
+        prompts rather than one combined multi-hole prompt. Prefix/suffix
+        are each capped to `self.context_window_words` words (nearest to
+        the mask) when set, rather than using the entire document -- this
+        bounds prompt length/latency/memory independent of document
+        length, matching standard FIM practice (Codex/StarCoder-style
+        local context windows around the gap, not whole-document context).
 
         Args:
             corruption: the source `CorruptionResult`.
@@ -207,8 +221,13 @@ class QwenFIMRestorer(Restorer):
         words = corruption.original_text.split()
         prompts: list[str] = []
         for start, end in corruption.mask_positions:
-            prefix = " ".join(words[:start])
-            suffix = " ".join(words[end:])
+            prefix_words = words[:start]
+            suffix_words = words[end:]
+            if self.context_window_words is not None:
+                prefix_words = prefix_words[-self.context_window_words :]
+                suffix_words = suffix_words[: self.context_window_words]
+            prefix = " ".join(prefix_words)
+            suffix = " ".join(suffix_words)
             prompts.append(
                 f"{self.FIM_PREFIX_TOKEN}{prefix}"
                 f"{self.FIM_SUFFIX_TOKEN}{suffix}"
@@ -294,6 +313,7 @@ class MDLMRestorer(Restorer):
         model_name: str = "kuleshov-group/mdlm-owt",
         use_mock: bool = True,
         num_timesteps: int = 16,
+        context_window_words: Optional[int] = 75,
     ) -> None:
         """Initialize the MDLM restorer.
 
@@ -303,9 +323,17 @@ class MDLMRestorer(Restorer):
             num_timesteps: number of denoising steps (ablation axis:
                 "inference efficiency"). Higher = more steps = typically
                 higher quality, slower inference.
+            context_window_words: max number of words kept on each side of
+                the outermost mask positions when building the sequence to
+                denoise (see `_restore_real`). Bounds sequence length/
+                latency/memory independent of document length, and keeps
+                context comparable to `QwenFIMRestorer`'s own windowing for
+                a fair ablation comparison. `None` disables windowing (uses
+                the entire document, the original behavior).
         """
         super().__init__(model_name=model_name, use_mock=use_mock)
         self.num_timesteps = num_timesteps
+        self.context_window_words = context_window_words
         self._model = None
         self._tokenizer = None
         self._device = None
@@ -338,7 +366,10 @@ class MDLMRestorer(Restorer):
             restored_spans=restored_spans,
             model_name=self.model_name,
             is_mock=self.use_mock,
-            inference_config={"num_timesteps": self.num_timesteps},
+            inference_config={
+                "num_timesteps": self.num_timesteps,
+                "context_window_words": self.context_window_words,
+            },
             prompt_used=None,
             latency_seconds=latency,
         )
@@ -380,6 +411,19 @@ class MDLMRestorer(Restorer):
         installs a pure-PyTorch stand-in under the same module names
         before loading, so this runs on any GPU.
 
+        When `self.context_window_words` is set, only a window of words
+        around the outermost mask positions (see `corruption.mask_positions`)
+        is tokenized/denoised, rather than the entire `original_text` --
+        this bounds sequence length/latency independent of document length.
+        For `SpanMasking` (a single contiguous mask) this always shrinks
+        the sequence to roughly `2 * context_window_words` words. For
+        `RandomTokenMasking`, since mask positions are scattered across the
+        whole document by construction, the window still spans from the
+        first to the last masked word plus margin -- it bounds the
+        irrelevant head/tail of the document, but doesn't shrink the
+        interior, since all masks are denoised jointly in one pass (unlike
+        `QwenFIMRestorer`, which treats each mask position independently).
+
         Args:
             corruption: the source `CorruptionResult`.
 
@@ -401,6 +445,7 @@ class MDLMRestorer(Restorer):
         from src.flash_attn_shim import install as install_flash_attn_shim
         from src.mdlm_utils import (
             align_mask_positions_to_tokens,
+            compute_word_window,
             denoise,
             resolve_mask_token_id,
         )
@@ -418,12 +463,22 @@ class MDLMRestorer(Restorer):
         model = self._model
         device = self._device
 
-        token_ranges = align_mask_positions_to_tokens(
-            corruption.original_text, corruption.mask_positions, tokenizer
-        )
-        input_ids = tokenizer(corruption.original_text, return_tensors="pt")[
-            "input_ids"
+        words = corruption.original_text.split()
+        if self.context_window_words is not None:
+            window_start, window_end = compute_word_window(
+                len(words), corruption.mask_positions, self.context_window_words
+            )
+        else:
+            window_start, window_end = 0, len(words)
+        windowed_text = " ".join(words[window_start:window_end])
+        windowed_mask_positions = [
+            (s - window_start, e - window_start) for s, e in corruption.mask_positions
         ]
+
+        token_ranges = align_mask_positions_to_tokens(
+            windowed_text, windowed_mask_positions, tokenizer
+        )
+        input_ids = tokenizer(windowed_text, return_tensors="pt")["input_ids"]
         mask_token_id = resolve_mask_token_id(model, tokenizer)
         for start, end in token_ranges:
             input_ids[0, start:end] = mask_token_id

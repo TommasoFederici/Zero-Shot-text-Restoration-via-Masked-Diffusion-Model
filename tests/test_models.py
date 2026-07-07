@@ -15,7 +15,7 @@ import re
 import pytest
 
 from src.data import RandomTokenMasking, SpanMasking, load_toy_dataset
-from src.mdlm_utils import align_mask_positions_to_tokens
+from src.mdlm_utils import align_mask_positions_to_tokens, compute_word_window
 from src.models import (
     MDLMRestorer,
     QwenFIMRestorer,
@@ -110,6 +110,101 @@ def test_align_mask_positions_to_tokens_word_per_token() -> None:
         tokenizer=_StubTokenizer(),
     )
     assert token_ranges == [(1, 3), (4, 5)]
+
+
+def test_qwen_fim_prompt_is_windowed_by_context_window_words() -> None:
+    from src.data import CorruptionResult
+
+    words = [f"w{i}" for i in range(40)]
+    text = " ".join(words)
+    corruption = CorruptionResult(
+        original_text=text,
+        corrupted_text=text,
+        ground_truth_spans=["w20"],
+        mask_positions=[(20, 21)],
+        masking_ratio_requested=0.1,
+        masking_ratio_actual=0.1,
+        corruption_type="span",
+        mask_token="<mask>",
+        num_words_total=len(words),
+        seed=None,
+    )
+    result = QwenFIMRestorer(use_mock=True, context_window_words=3).restore(corruption)
+
+    prompt = result.prompt_used
+    prefix = prompt.split("<|fim_prefix|>")[1].split("<|fim_suffix|>")[0]
+    suffix = prompt.split("<|fim_suffix|>")[1].split("<|fim_middle|>")[0]
+
+    assert prefix.split() == ["w17", "w18", "w19"]
+    assert suffix.split() == ["w21", "w22", "w23"]
+
+
+def test_qwen_fim_prompt_full_context_when_window_none() -> None:
+    from src.data import CorruptionResult
+
+    words = [f"w{i}" for i in range(40)]
+    text = " ".join(words)
+    corruption = CorruptionResult(
+        original_text=text,
+        corrupted_text=text,
+        ground_truth_spans=["w20"],
+        mask_positions=[(20, 21)],
+        masking_ratio_requested=0.1,
+        masking_ratio_actual=0.1,
+        corruption_type="span",
+        mask_token="<mask>",
+        num_words_total=len(words),
+        seed=None,
+    )
+    result = QwenFIMRestorer(use_mock=True, context_window_words=None).restore(corruption)
+
+    prompt = result.prompt_used
+    prefix = prompt.split("<|fim_prefix|>")[1].split("<|fim_suffix|>")[0]
+    suffix = prompt.split("<|fim_suffix|>")[1].split("<|fim_middle|>")[0]
+
+    assert prefix.split() == words[:20]
+    assert suffix.split() == words[21:]
+
+
+def test_qwen_context_window_words_default_in_config() -> None:
+    text = load_toy_dataset()[2]
+    corruption = SpanMasking(seed=42).corrupt(text, 0.3)
+    result = QwenFIMRestorer(use_mock=True).restore(corruption)
+
+    assert result.inference_config["context_window_words"] == 75
+
+
+def test_mdlm_context_window_words_reflected_in_config() -> None:
+    text = load_toy_dataset()[2]
+    corruption = SpanMasking(seed=42).corrupt(text, 0.3)
+    result = MDLMRestorer(use_mock=True, context_window_words=30).restore(corruption)
+
+    assert result.inference_config["context_window_words"] == 30
+
+
+def test_compute_word_window_span_masking() -> None:
+    window = compute_word_window(
+        num_words=100, mask_positions=[(40, 50)], context_window_words=10
+    )
+    assert window == (30, 60)
+
+
+def test_compute_word_window_clamped_at_document_boundaries() -> None:
+    assert compute_word_window(
+        num_words=100, mask_positions=[(2, 5)], context_window_words=10
+    ) == (0, 15)
+    assert compute_word_window(
+        num_words=100, mask_positions=[(95, 98)], context_window_words=10
+    ) == (85, 100)
+
+
+def test_compute_word_window_spans_scattered_random_token_positions() -> None:
+    window = compute_word_window(
+        num_words=100,
+        mask_positions=[(10, 11), (50, 51), (80, 81)],
+        context_window_words=5,
+    )
+    assert window == (5, 86)
 
 
 @pytest.mark.skipif(

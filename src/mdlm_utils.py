@@ -34,6 +34,35 @@ def _word_char_spans(text: str) -> list[tuple[int, int]]:
     return [(m.start(), m.end()) for m in re.finditer(r"\S+", text)]
 
 
+def compute_word_window(
+    num_words: int,
+    mask_positions: list[tuple[int, int]],
+    context_window_words: int,
+) -> tuple[int, int]:
+    """Compute a word-index window covering all mask positions plus margin.
+
+    Used to bound the amount of surrounding text tokenized/denoised for a
+    single restoration, instead of always using the entire document --
+    latency/memory scale with sequence length, and most of a long
+    document is irrelevant to filling a local gap.
+
+    Args:
+        num_words: total number of words in the source text.
+        mask_positions: word-index (start, end) ranges to be restored.
+        context_window_words: number of words of margin to keep on each
+            side of the outermost mask positions.
+
+    Returns:
+        A `(window_start, window_end)` word-index pair, clamped to
+        `[0, num_words]`, spanning from `context_window_words` words
+        before the earliest mask start to `context_window_words` words
+        after the latest mask end.
+    """
+    window_start = max(0, min(s for s, _ in mask_positions) - context_window_words)
+    window_end = min(num_words, max(e for _, e in mask_positions) + context_window_words)
+    return window_start, window_end
+
+
 def align_mask_positions_to_tokens(
     original_text: str,
     mask_positions: list[tuple[int, int]],

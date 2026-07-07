@@ -13,6 +13,7 @@ import pytest
 from src.data import (
     RandomTokenMasking,
     SpanMasking,
+    _passes_length_filter,
     load_toy_dataset,
 )
 
@@ -84,3 +85,27 @@ def test_empty_text_raises_value_error() -> None:
         RandomTokenMasking().corrupt("   ", 0.3)
     with pytest.raises(ValueError):
         SpanMasking().corrupt("", 0.3)
+
+
+def test_passes_length_filter_drops_short_lines() -> None:
+    assert not _passes_length_filter("one two", min_words=10, max_words=500)
+
+
+def test_passes_length_filter_drops_long_lines() -> None:
+    long_text = " ".join("word" for _ in range(501))
+    assert not _passes_length_filter(long_text, min_words=10, max_words=500)
+
+
+def test_passes_length_filter_keeps_lines_within_bounds() -> None:
+    text = " ".join("word" for _ in range(50))
+    assert _passes_length_filter(text, min_words=10, max_words=500)
+
+
+def test_passes_length_filter_no_upper_bound_when_max_words_none() -> None:
+    long_text = " ".join("word" for _ in range(10_000))
+    assert _passes_length_filter(long_text, min_words=10, max_words=None)
+
+
+def test_passes_length_filter_drops_section_headers() -> None:
+    header = "= " + " ".join("word" for _ in range(20)) + " ="
+    assert not _passes_length_filter(header, min_words=10, max_words=500)

@@ -249,17 +249,53 @@ def load_toy_dataset() -> list[str]:
     ]
 
 
+def _passes_length_filter(text: str, min_words: int, max_words: Optional[int]) -> bool:
+    """Check whether a candidate WikiText-103 line should be kept.
+
+    Extracted as a pure function so the filtering rules can be unit-tested
+    without a real dataset download (see `tests/test_data.py`).
+
+    Args:
+        text: a stripped candidate line.
+        min_words: minimum whitespace-token count to keep the line (drops
+            blank lines and short fragments).
+        max_words: maximum whitespace-token count to keep the line, or
+            None for no upper bound. Lines are dropped rather than
+            truncated, so every retained sample stays a complete
+            document -- truncating could cut a paragraph mid-sentence and
+            feed a corrupted/incomplete document into the corruption
+            pipeline. Bounding document length also keeps per-sample
+            latency comparable across the ablation grid, and bounds
+            `MDLMRestorer`'s worst case: for `RandomTokenMasking`,
+            `compute_word_window` (src/mdlm_utils.py) spans from the
+            first to the last masked word without shrinking the
+            interior, so on an unbounded document that window -- and the
+            cost of each denoising step -- can approach the full
+            document length regardless of `context_window_words`.
+
+    Returns:
+        True if the line should be kept.
+    """
+    word_count = len(text.split())
+    if word_count < min_words:
+        return False
+    if max_words is not None and word_count > max_words:
+        return False
+    return not (text.startswith("=") and text.endswith("="))
+
+
 def load_wikitext103(
     split: str = "train",
     max_samples: Optional[int] = 200,
     min_words: int = 10,
+    max_words: Optional[int] = 500,
     cache_dir: Optional[Path] = None,
 ) -> list[str]:
     """Load a subset of WikiText-103 (raw) via HuggingFace `datasets`.
 
-    Filters out empty/whitespace-only lines and short lines (WikiText-103
-    raw text contains many blank lines and markdown-style section headers
-    such as "= Title =").
+    Filters out empty/whitespace-only lines, short lines, markdown-style
+    section headers (e.g. "= Title ="), and (by default) overly long
+    lines -- see `_passes_length_filter`.
 
     Args:
         split: HuggingFace split name, e.g. "train", "validation", "test".
@@ -267,6 +303,9 @@ def load_wikitext103(
             matching lines; keep this small in local dev to avoid
             excessive memory/download.
         min_words: minimum whitespace-token count for a line to be kept.
+        max_words: maximum whitespace-token count for a line to be kept,
+            or None for no upper bound. Over-long lines are dropped, not
+            truncated (see `_passes_length_filter` for the rationale).
         cache_dir: optional cache directory passed to `load_dataset`;
             defaults to HuggingFace's own cache location if None.
 
@@ -289,11 +328,7 @@ def load_wikitext103(
         cache_dir=str(cache_dir) if cache_dir else None,
     )
     texts = [line.strip() for line in dataset["text"]]
-    texts = [
-        t
-        for t in texts
-        if len(t.split()) >= min_words and not (t.startswith("=") and t.endswith("="))
-    ]
+    texts = [t for t in texts if _passes_length_filter(t, min_words, max_words)]
     if max_samples is not None:
         texts = texts[:max_samples]
     return texts

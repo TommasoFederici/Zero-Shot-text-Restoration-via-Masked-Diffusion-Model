@@ -137,6 +137,7 @@ class QwenFIMRestorer(Restorer):
         max_new_tokens: int = 64,
         temperature: float = 0.2,
         context_window_words: Optional[int] = 75,
+        qwen_batch_size: int = 16,
     ) -> None:
         """Initialize the Qwen FIM restorer.
 
@@ -151,11 +152,20 @@ class QwenFIMRestorer(Restorer):
                 latency/memory -- regardless of document length, instead of
                 feeding the entire prefix/suffix. `None` disables windowing
                 (uses the full prefix/suffix, the original behavior).
+            qwen_batch_size: max number of FIM prompts generated in a single
+                batched `model.generate()` call in the real inference path
+                (see `_restore_real`). `RandomTokenMasking` can produce many
+                independent single-word mask positions per document, each
+                needing its own FIM prompt -- batching multiple prompts per
+                `generate()` call collapses those into far fewer forward
+                passes, while chunking at this size bounds peak GPU memory
+                instead of batching everything in one call.
         """
         super().__init__(model_name=model_name, use_mock=use_mock)
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.context_window_words = context_window_words
+        self.qwen_batch_size = qwen_batch_size
         self._model = None
         self._tokenizer = None
 
@@ -191,6 +201,7 @@ class QwenFIMRestorer(Restorer):
                 "max_new_tokens": self.max_new_tokens,
                 "temperature": self.temperature,
                 "context_window_words": self.context_window_words,
+                "qwen_batch_size": self.qwen_batch_size,
             },
             prompt_used=prompts[0] if prompts else None,
             latency_seconds=latency,
@@ -262,7 +273,8 @@ class QwenFIMRestorer(Restorer):
             prompts: FIM prompts built by `_build_fim_prompts`.
 
         Returns:
-            A list of generated fill strings, one per prompt.
+            A list of generated fill strings, one per prompt, in the same
+            order as `prompts`.
 
         Note:
             Lazily imports `transformers` and loads real model weights on
@@ -271,11 +283,21 @@ class QwenFIMRestorer(Restorer):
             it will attempt to download and load a multi-GB checkpoint.
             Intended only for the Colab notebook (Phase 4) or explicit
             opt-in scripts. Call `unload()` to free the cached model.
+
+            Prompts are processed in batches of `self.qwen_batch_size`,
+            left-padded so every row in a batch shares the same prompt
+            length -- required for `RandomTokenMasking`, which can produce
+            many independent single-word mask positions (and thus many FIM
+            prompts) per document; batching collapses those into far fewer
+            `generate()` calls instead of one sequential call per mask.
         """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         if self._model is None:
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            if self._tokenizer.pad_token is None:
+                self._tokenizer.pad_token = self._tokenizer.eos_token
+            self._tokenizer.padding_side = "left"
             self._model = AutoModelForCausalLM.from_pretrained(
                 self.model_name, dtype="auto", device_map="auto"
             )
@@ -283,19 +305,23 @@ class QwenFIMRestorer(Restorer):
         model = self._model
 
         restored_spans: list[str] = []
-        for prompt in prompts:
-            inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        for batch_start in range(0, len(prompts), self.qwen_batch_size):
+            batch = prompts[batch_start : batch_start + self.qwen_batch_size]
+            inputs = tokenizer(batch, return_tensors="pt", padding=True).to(
+                model.device
+            )
             output_ids = model.generate(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
                 temperature=self.temperature,
                 do_sample=self.temperature > 0.0,
             )
-            generated = tokenizer.decode(
-                output_ids[0][inputs["input_ids"].shape[1] :],
-                skip_special_tokens=True,
-            )
-            restored_spans.append(generated)
+            prompt_length = inputs["input_ids"].shape[1]
+            for row in output_ids:
+                generated = tokenizer.decode(
+                    row[prompt_length:], skip_special_tokens=True
+                )
+                restored_spans.append(generated)
         return restored_spans
 
 

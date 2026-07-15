@@ -25,3 +25,6 @@ venv/
 .vscode/
 
 outputs/
+
+# REPORT
+latex/

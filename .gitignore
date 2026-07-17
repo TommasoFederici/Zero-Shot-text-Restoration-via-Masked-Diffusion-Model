@@ -4,9 +4,6 @@ idea_progetto.md
 project_idea.md
 .claude/
 
-# Data & model artifacts
-data/
-
 # Python
 __pycache__/
 *.pyc
@@ -23,6 +20,9 @@ venv/
 
 # IDE
 .vscode/
+
+# Testing
+.pytest_cache/
 
 outputs/
 

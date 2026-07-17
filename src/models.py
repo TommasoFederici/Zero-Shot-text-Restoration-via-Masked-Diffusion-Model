@@ -132,7 +132,7 @@ class QwenFIMRestorer(Restorer):
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2.5-Coder-7B",
+        model_name: str = "Qwen/Qwen2.5-Coder-0.5B",
         use_mock: bool = True,
         max_new_tokens: int = 64,
         temperature: float = 0.2,

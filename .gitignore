@@ -1,8 +1,9 @@
 # Private project instructions / notes
 CLAUDE.md
-idea_progetto.md
 project_idea.md
 .claude/
+
+
 
 # Python
 __pycache__/
@@ -20,9 +21,6 @@ venv/
 
 # IDE
 .vscode/
-
-# Testing
-.pytest_cache/
 
 outputs/
 

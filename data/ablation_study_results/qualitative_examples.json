@@ -1,0 +1,38 @@
+{
+  "Qwen/Qwen2.5-Coder-0.5B__worst": {
+    "model_name": "Qwen/Qwen2.5-Coder-0.5B",
+    "label": "worst",
+    "corrupted_text": "<mask> \" <mask> <mask> the Work Done <mask> <mask> , 1862 , Little Rock Arsenal \" <mask> : Fabrication :",
+    "restored_text": "# -*- coding: utf-8 -*-\n\"\"\"\nCreated on Mon Nov 22 14:56:20 2019\n\n@author: User\n\"\"\"\n\n# Summary of the Work Done for November , 1862 , Little Rock Arsenal\n\n# The work done for November , 1 \" \"  of the Work Done for November , 1862 , Little Rock Arsenal \" is a 1912 novel by American author William H. H. S. \" H. S. \" H. S. \" H. S. \" H. S. \" H. S. \" H. S the Work Done  in the <|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|><|fim_pad|>  the 1862 \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" \" , 1862 , Little Rock Arsenal \"  : Fabrication :",
+    "original_text": "A \" Summary of the Work Done for November , 1862 , Little Rock Arsenal \" shows : Fabrication :",
+    "rouge_l_f1": 0.11320754716981131,
+    "bertscore_f1": 0.7332289814949036
+  },
+  "Qwen/Qwen2.5-Coder-0.5B__best": {
+    "model_name": "Qwen/Qwen2.5-Coder-0.5B",
+    "label": "best",
+    "corrupted_text": "<mask> Thoughts in <mask> <mask> Verse ( by M. K. Westcott <mask> ; Blackie , <mask>",
+    "restored_text": "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n Thoughts in  the Bible ( by M. K. Westcott ) ; Blackie , 1925\nChild Thoughts in the Bible ( by M. K. Westcott ) ; Blackie , 1925\nChild Thoughts in the Bible ( by M. K. Westcott ) ; Blackie ,  s\nThe  Verse ( by M. K. Westcott )\nThe Child Thoughts in Picture and Verse ( by M. K. Westcott ; Blackie , \n1914\n",
+    "original_text": "Child Thoughts in Picture and Verse ( by M. K. Westcott ) ; Blackie , 1925",
+    "rouge_l_f1": 0.3492063492063492,
+    "bertscore_f1": 0.891349196434021
+  },
+  "kuleshov-group/mdlm-owt__worst": {
+    "model_name": "kuleshov-group/mdlm-owt",
+    "label": "worst",
+    "corrupted_text": "In <mask> , <mask> <mask> Rock fell <mask> the Union Army and the arsenal had been recaptured <mask> General Fredrick Steele <mask> 8 <mask> 500 troops from <mask> arsenal beginning <mask> Camden Expedition <mask>",
+    "restored_text": "In auguration , Rock , Rock fell to the Union Army and the arsenal had been recaptured by General Fredrick Steele on 8 April, taking 500 troops from the arsenal beginning at Camden Expedition ary",
+    "original_text": "In 1864 , after Little Rock fell to the Union Army and the arsenal had been recaptured , General Fredrick Steele marched 8 @,@ 500 troops from the arsenal beginning the Camden Expedition .",
+    "rouge_l_f1": 0.7936507936507938,
+    "bertscore_f1": 0.8873793482780457
+  },
+  "kuleshov-group/mdlm-owt__best": {
+    "model_name": "kuleshov-group/mdlm-owt",
+    "label": "best",
+    "corrupted_text": "<mask> <mask> <mask> listed in <mask> <mask> <mask> <mask> Historic Places in 1970 . <mask> <mask> its <mask> with the Camden Expedition of 1864 , the arsenal <mask> be included in <mask> Camden Expedition Sites National Historic Landmark designated in <mask> .",
+    "restored_text": " has was listed in the National Register of Historic Places in 1970 . Because of its association with the Camden Expedition of 1864 , the arsenal will be included in the Camden Expedition Sites National Historic Landmark designated in 1978 .",
+    "original_text": "The arsenal was listed in the National Register of Historic Places in 1970 . Due to its association with the Camden Expedition of 1864 , the arsenal may be included in the Camden Expedition Sites National Historic Landmark designated in 1994 .",
+    "rouge_l_f1": 0.8571428571428572,
+    "bertscore_f1": 0.9767855405807495
+  }
+}

@@ -340,6 +340,8 @@ class MDLMRestorer(Restorer):
         use_mock: bool = True,
         num_timesteps: int = 16,
         context_window_words: Optional[int] = 75,
+        eps: float = 1e-3,
+        seed: Optional[int] = None,
     ) -> None:
         """Initialize the MDLM restorer.
 
@@ -356,10 +358,18 @@ class MDLMRestorer(Restorer):
                 context comparable to `QwenFIMRestorer`'s own windowing for
                 a fair ablation comparison. `None` disables windowing (uses
                 the entire document, the original behavior).
+            eps: log-linear noise schedule floor forwarded to
+                `src.mdlm_utils.denoise`. See that function's docstring.
+            seed: if set, seeds a `torch.Generator` used for `denoise`'s
+                reverse-diffusion sampling, making an otherwise-stochastic
+                restoration reproducible across runs. `None` (default)
+                samples non-reproducibly.
         """
         super().__init__(model_name=model_name, use_mock=use_mock)
         self.num_timesteps = num_timesteps
         self.context_window_words = context_window_words
+        self.eps = eps
+        self.seed = seed
         self._model = None
         self._tokenizer = None
         self._device = None
@@ -395,6 +405,8 @@ class MDLMRestorer(Restorer):
             inference_config={
                 "num_timesteps": self.num_timesteps,
                 "context_window_words": self.context_window_words,
+                "eps": self.eps,
+                "seed": self.seed,
             },
             prompt_used=None,
             latency_seconds=latency,
@@ -426,10 +438,12 @@ class MDLMRestorer(Restorer):
 
         Loads the real `kuleshov-group/mdlm-owt` checkpoint via
         `transformers.AutoModelForMaskedLM` with `trust_remote_code=True`
-        (its own reference repository only documents unconditional
-        sampling, not conditional/masked infilling), then resolves masked
-        token ranges with `src.mdlm_utils.denoise`, which keeps all
-        non-masked context tokens clamped throughout the reverse process.
+        (its own reference repository only ships an unconditional
+        sampler), then resolves masked token ranges with
+        `src.mdlm_utils.denoise`, which runs MDLM's actual stochastic
+        reverse-diffusion update (ported from that repo's `diffusion.py`)
+        and, as a byproduct of that update rule, keeps all non-masked
+        context tokens unchanged throughout the reverse process.
 
         The checkpoint's custom modeling code hard-imports `flash_attn`
         with no eager/sdpa fallback, but real `flash-attn` only supports
@@ -509,6 +523,10 @@ class MDLMRestorer(Restorer):
         for start, end in token_ranges:
             input_ids[0, start:end] = mask_token_id
 
+        generator = None
+        if self.seed is not None:
+            generator = torch.Generator(device=device).manual_seed(self.seed)
+
         resolved_ids = denoise(
             model=model,
             input_ids=input_ids,
@@ -516,6 +534,8 @@ class MDLMRestorer(Restorer):
             mask_token_id=mask_token_id,
             num_timesteps=self.num_timesteps,
             device=device,
+            eps=self.eps,
+            generator=generator,
         )
 
         return [
